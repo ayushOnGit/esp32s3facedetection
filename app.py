@@ -303,36 +303,78 @@ def process_frames():
     global processed_frame
     while True:
         if not frame_queue.empty():
+            start_time = time.time()
+            # Get frame data from queue
             frame_data = frame_queue.get()
+            # Decode and process frame
             frame = cv2.imdecode(np.frombuffer(frame_data, np.uint8), cv2.IMREAD_COLOR)
+            frame_height, frame_width = frame.shape[:2]
+            # Resize for faster processing
             small_frame = cv2.resize(frame, (0, 0), fx=0.5, fy=0.5)
             gray = cv2.cvtColor(small_frame, cv2.COLOR_BGR2GRAY)
-
-            faces = face_cascade.detectMultiScale(gray, scaleFactor=1.2, minNeighbors=3, minSize=(30, 30))
+            
+            # Face detection
+            faces = face_cascade.detectMultiScale(
+                gray,
+                scaleFactor=1.2,
+                minNeighbors=3,
+                minSize=(30, 30),
+                flags=cv2.CASCADE_SCALE_IMAGE
+            )
+            # Scale detected face coordinates back to original size
             faces = [(x * 2, y * 2, w * 2, h * 2) for (x, y, w, h) in faces]
 
+            # If any face is detected, compute the traction command based on its position/size.
             if len(faces) > 0:
-                socketio.emit('face_detection', {'face_detected': True})
+                # Using the first detected face
+                (x, y, w, h) = faces[0]
+                center_x = x + w / 2
+                # Determine command based on thresholds
+                if center_x < frame_width * 0.3:
+                    command = "left"
+                elif center_x > frame_width * 0.7:
+                    command = "right"
+                elif w < frame_width * 0.2:
+                    command = "backward"
+                elif w > frame_width * 0.5:
+                    command = "forward"
+                else:
+                    command = "stop"
             else:
-                socketio.emit('face_detection', {'face_detected': False})
+                command = "stop"
+            
+            # Emit the traction command via WebSocket to the React Native app
+            socketio.emit('face_traction', {'command': command})
 
+            # Draw bounding boxes for all faces
             for (x, y, w, h) in faces:
                 cv2.rectangle(frame, (x, y), (x + w, y + h), (255, 0, 0), 2)
-
+            
+            # Encode frame
             _, buffer = cv2.imencode('.jpg', frame, [
                 cv2.IMWRITE_JPEG_QUALITY, 60,
                 cv2.IMWRITE_JPEG_OPTIMIZE, 1
             ])
-
+            
             with lock:
                 processed_frame = buffer.tobytes()
+            
+            print(f"Processed frame in {(time.time() - start_time) * 1000:.1f}ms")
+
+@app.route('/')
+def hello_world():
+    return "Hello, World! 🚀 Welcome to Face Detection API!"
 
 @app.route('/upload', methods=['POST'])
 def handle_upload():
-    if frame_queue.full():
-        frame_queue.get()
-    frame_queue.put(request.data)
-    return "OK", 200
+    try:
+        if frame_queue.full():
+            frame_queue.get()  # Discard the oldest frame if the queue is full
+        frame_queue.put(request.data)
+        return "OK", 200
+    except Exception as e:
+        print(f"Upload error: {str(e)}")
+        return "Error", 500
 
 def generate_frames():
     while True:
@@ -341,10 +383,16 @@ def generate_frames():
         if current_frame is not None:
             yield (b'--frame\r\n'
                    b'Content-Type: image/jpeg\r\n\r\n' + current_frame + b'\r\n')
+        else:
+            # Send a blank frame if no data
+            yield (b'--frame\r\n'
+                   b'Content-Type: image/jpeg\r\n\r\n' + b'\xff\xd8\xff\xe0\x00\x10JFIF\x00' + b'\r\n')
+            time.sleep(0.01)
 
 @app.route('/video_feed')
 def video_feed():
-    return Response(generate_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
+    return Response(generate_frames(),
+                    mimetype='multipart/x-mixed-replace; boundary=frame')
 
 @socketio.on('connect')
 def test_connect():
@@ -352,6 +400,9 @@ def test_connect():
 
 if __name__ == '__main__':
     threading.Thread(target=process_frames, daemon=True).start()
+    cv2.setUseOptimized(True)
+    cv2.ocl.setUseOpenCL(True)
     socketio.run(app, host="0.0.0.0", port=5999)
+
 
 
