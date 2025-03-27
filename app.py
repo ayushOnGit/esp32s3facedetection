@@ -292,6 +292,7 @@ from queue import Queue
 from flask_socketio import SocketIO
 
 app = Flask(__name__)
+# Initialize SocketIO (default endpoint is /socket.io)
 socketio = SocketIO(app, cors_allowed_origins="*")
 face_cascade = cv2.CascadeClassifier('haarcascade/haarcascade_frontalface_default.xml')
 
@@ -305,14 +306,11 @@ def process_frames():
     while True:
         if not frame_queue.empty():
             start_time = time.time()
-            
             # Get frame data from queue
             frame_data = frame_queue.get()
             
             # Decode and process frame
             frame = cv2.imdecode(np.frombuffer(frame_data, np.uint8), cv2.IMREAD_COLOR)
-            
-            # Optimized processing pipeline
             small_frame = cv2.resize(frame, (0, 0), fx=0.5, fy=0.5)
             gray = cv2.cvtColor(small_frame, cv2.COLOR_BGR2GRAY)
             
@@ -334,22 +332,24 @@ def process_frames():
             else:
                 socketio.emit('face_detection', {'face_detected': False})
             
-            # Draw bounding boxes around detected faces
+            # Draw bounding boxes
             for (x, y, w, h) in faces:
                 cv2.rectangle(frame, (x, y), (x + w, y + h), (255, 0, 0), 2)
             
-            # Encode with optimized settings
+            # Encode frame with optimized settings
             _, buffer = cv2.imencode('.jpg', frame, [
                 cv2.IMWRITE_JPEG_QUALITY, 60,
                 cv2.IMWRITE_JPEG_OPTIMIZE, 1
             ])
             
-            # Update processed frame
+            # Update processed frame safely
             with lock:
                 processed_frame = buffer.tobytes()
             
-            # Log processing performance
             print(f"Processed frame in {(time.time() - start_time) * 1000:.1f}ms")
+        else:
+            # Small sleep to avoid busy waiting
+            time.sleep(0.005)
 
 @app.route('/')
 def hello_world():
@@ -382,7 +382,7 @@ def generate_frames():
             # Send blank frame if no data
             yield (b'--frame\r\n'
                    b'Content-Type: image/jpeg\r\n\r\n' + b'\xff\xd8\xff\xe0\x00\x10JFIF\x00' + b'\r\n')
-            time.sleep(0.01)
+        time.sleep(0.01)
 
 @app.route('/video_feed')
 def video_feed():
@@ -390,19 +390,20 @@ def video_feed():
                     mimetype='multipart/x-mixed-replace; boundary=frame')
 
 @socketio.on('connect')
-def test_connect():
-    print('Client connected')
+def handle_connect():
+    print("Client connected via SocketIO")
 
 if __name__ == '__main__':
-    # Start processing thread
+    # Start frame processing in a separate thread
     threading.Thread(target=process_frames, daemon=True).start()
     
     # Enable OpenCV optimizations
     cv2.setUseOptimized(True)
     cv2.ocl.setUseOpenCL(True)
     
-    # Run the server with SocketIO on port 5999
+    # Run the app with SocketIO (default WebSocket endpoint: /socket.io)
     socketio.run(app, host="0.0.0.0", port=5999)
+
 
 
 
