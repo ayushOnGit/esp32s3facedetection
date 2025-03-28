@@ -283,6 +283,138 @@
 
 
 
+# from flask import Flask, Response, request
+# import cv2
+# import numpy as np
+# import threading
+# import time
+# from queue import Queue
+
+# app = Flask(__name__)
+# face_cascade = cv2.CascadeClassifier('haarcascade/haarcascade_frontalface_default.xml')
+
+# # Shared resources with thread safety
+# frame_queue = Queue(maxsize=5)
+# processed_frame = None
+# last_processed_time = None
+# current_face_status = False
+# lock = threading.Lock()
+
+# def process_frames():
+#     global processed_frame, last_processed_time, current_face_status
+#     while True:
+#         if not frame_queue.empty():
+#             start_time = time.time()
+            
+#             # Get frame data from queue
+#             frame_data = frame_queue.get()
+            
+#             # Decode and process frame
+#             frame = cv2.imdecode(np.frombuffer(frame_data, np.uint8), cv2.IMREAD_COLOR)
+            
+#             # Optimized processing pipeline
+#             small_frame = cv2.resize(frame, (0, 0), fx=0.5, fy=0.5)
+#             gray = cv2.cvtColor(small_frame, cv2.COLOR_BGR2GRAY)
+            
+#             # Face detection with optimized parameters
+#             faces = face_cascade.detectMultiScale(
+#                 gray,
+#                 scaleFactor=1.2,
+#                 minNeighbors=3,
+#                 minSize=(30, 30),
+#                 flags=cv2.CASCADE_SCALE_IMAGE
+#             )
+            
+#             # Update face status and timestamp with lock
+#             with lock:
+#                 last_processed_time = time.time()
+#                 current_face_status = len(faces) > 0
+
+#             # Scale coordinates back to original size
+#             faces = [(x * 2, y * 2, w * 2, h * 2) for (x, y, w, h) in faces]
+            
+#             # Draw bounding boxes
+#             for (x, y, w, h) in faces:
+#                 cv2.rectangle(frame, (x, y), (x + w, y + h), (255, 0, 0), 2)
+            
+#             # Encode with optimized settings
+#             _, buffer = cv2.imencode('.jpg', frame, [
+#                 cv2.IMWRITE_JPEG_QUALITY, 60,
+#                 cv2.IMWRITE_JPEG_OPTIMIZE, 1
+#             ])
+            
+#             # Update processed frame
+#             with lock:
+#                 processed_frame = buffer.tobytes()
+            
+#             # Performance logging
+#             print(f"Processed frame in {(time.time() - start_time) * 1000:.1f}ms")
+
+# @app.route('/')
+# def hello_world():
+#     return "Face Detection Server 🚀 - Endpoints: /upload (POST), /video_feed, /face_status"
+
+# @app.route('/upload', methods=['POST'])
+# def handle_upload():
+#     try:
+#         if frame_queue.full():
+#             frame_queue.get()  # Discard oldest frame if queue is full
+        
+#         frame_queue.put(request.data)
+#         return "OK", 200
+#     except Exception as e:
+#         print(f"Upload error: {str(e)}")
+#         return "Error", 500
+
+# def generate_frames():
+#     while True:
+#         with lock:
+#             current_frame = processed_frame
+        
+#         if current_frame is not None:
+#             yield (b'--frame\r\n'
+#                    b'Content-Type: image/jpeg\r\n\r\n' + current_frame + b'\r\n')
+#         else:
+#             # Send blank frame if no data available
+#             yield (b'--frame\r\n'
+#                    b'Content-Type: image/jpeg\r\n\r\n' + b'\xff\xd8\xff\xe0\x00\x10JFIF\x00' + b'\r\n')
+#             time.sleep(0.01)
+
+# @app.route('/video_feed')
+# def video_feed():
+#     return Response(generate_frames(),
+#                     mimetype='multipart/x-mixed-replace; boundary=frame')
+
+# @app.route('/face_status')
+# def face_status():
+#     with lock:
+#         last_time = last_processed_time
+#         status = current_face_status
+    
+#     if last_time is None:
+#         return Response(b'\x00', mimetype='application/octet-stream')
+    
+#     current_time = time.time()
+#     if current_time - last_time <= 3.0 and status:
+#         return Response(b'\xD1', mimetype='application/octet-stream')
+#     else:
+#         return Response(b'\x00', mimetype='application/octet-stream')
+
+# if __name__ == '__main__':
+#     # Start processing thread
+#     threading.Thread(target=process_frames, daemon=True).start()
+    
+#     # Enable OpenCV optimizations
+#     cv2.setUseOptimized(True)
+#     cv2.ocl.setUseOpenCL(True)
+    
+#     # Configure production server
+#     from waitress import serve
+#     serve(app, host="0.0.0.0", port=5999)
+
+
+
+
 from flask import Flask, Response, request
 import cv2
 import numpy as np
@@ -300,8 +432,46 @@ last_processed_time = None
 current_face_status = False
 lock = threading.Lock()
 
+# Movement detection variables
+movement_state = "stop"
+previous_face_data = None  # (center_x, center_y, width, height)
+movement_lock = threading.Lock()
+FRAME_CENTER_THRESHOLD = 0.2  # 20% of frame width considered center
+SIZE_CHANGE_THRESHOLD = 0.15  # 15% size change for forward/backward
+POSITION_CHANGE_THRESHOLD = 0.1  # 10% position change for left/right
+
+def calculate_movement(current_data, frame_width, frame_height):
+    global previous_face_data
+    
+    if previous_face_data is None:
+        return "stop"
+    
+    (curr_cx, curr_cy, curr_w, curr_h) = current_data
+    (prev_cx, prev_cy, prev_w, prev_h) = previous_face_data
+    
+    # Calculate position changes
+    dx = curr_cx - prev_cx
+    dw = curr_w - prev_w
+    
+    # Normalize changes
+    position_change = abs(dx) / frame_width
+    size_change = abs(dw) / prev_w
+    
+    # Determine movement
+    if position_change > POSITION_CHANGE_THRESHOLD:
+        return "left" if dx < 0 else "right"
+    elif size_change > SIZE_CHANGE_THRESHOLD:
+        return "forward" if dw > 0 else "backward"
+    
+    # Check if centered
+    frame_center_x = frame_width / 2
+    if abs(curr_cx - frame_center_x) < (frame_width * FRAME_CENTER_THRESHOLD):
+        return "stop"
+    
+    return "stop"
+
 def process_frames():
-    global processed_frame, last_processed_time, current_face_status
+    global processed_frame, last_processed_time, current_face_status, previous_face_data, movement_state
     while True:
         if not frame_queue.empty():
             start_time = time.time()
@@ -311,6 +481,7 @@ def process_frames():
             
             # Decode and process frame
             frame = cv2.imdecode(np.frombuffer(frame_data, np.uint8), cv2.IMREAD_COLOR)
+            frame_height, frame_width = frame.shape[:2]
             
             # Optimized processing pipeline
             small_frame = cv2.resize(frame, (0, 0), fx=0.5, fy=0.5)
@@ -325,41 +496,66 @@ def process_frames():
                 flags=cv2.CASCADE_SCALE_IMAGE
             )
             
-            # Update face status and timestamp with lock
-            with lock:
-                last_processed_time = time.time()
-                current_face_status = len(faces) > 0
-
             # Scale coordinates back to original size
             faces = [(x * 2, y * 2, w * 2, h * 2) for (x, y, w, h) in faces]
             
+            current_face = None
+            if len(faces) > 0:
+                # Track largest face
+                current_face = max(faces, key=lambda f: f[2] * f[3])
+                x, y, w, h = current_face
+                center_x = x + w/2
+                center_y = y + h/2
+                current_data = (center_x, center_y, w, h)
+                
+                # Calculate movement
+                if previous_face_data is not None:
+                    new_state = calculate_movement(current_data, frame_width, frame_height)
+                    with movement_lock:
+                        movement_state = new_state
+                
+                previous_face_data = current_data
+            else:
+                with movement_lock:
+                    movement_state = "no_face"
+                previous_face_data = None
+            
             # Draw bounding boxes
-            for (x, y, w, h) in faces:
+            if current_face is not None:
+                x, y, w, h = current_face
                 cv2.rectangle(frame, (x, y), (x + w, y + h), (255, 0, 0), 2)
             
-            # Encode with optimized settings
+            # Encode and update frame
             _, buffer = cv2.imencode('.jpg', frame, [
                 cv2.IMWRITE_JPEG_QUALITY, 60,
                 cv2.IMWRITE_JPEG_OPTIMIZE, 1
             ])
             
-            # Update processed frame
             with lock:
                 processed_frame = buffer.tobytes()
+                last_processed_time = time.time()
+                current_face_status = len(faces) > 0
             
-            # Performance logging
             print(f"Processed frame in {(time.time() - start_time) * 1000:.1f}ms")
 
 @app.route('/')
-def hello_world():
-    return "Face Detection Server 🚀 - Endpoints: /upload (POST), /video_feed, /face_status"
+def index():
+    return """
+    <h1>Face Tracking Server</h1>
+    <p>Endpoints:</p>
+    <ul>
+        <li>POST /upload - Stream video frames</li>
+        <li>GET /video_feed - Get processed video stream</li>
+        <li>GET /face_status - Check face detection status</li>
+        <li>GET /movement - Get current movement state</li>
+    </ul>
+    """
 
 @app.route('/upload', methods=['POST'])
 def handle_upload():
     try:
         if frame_queue.full():
-            frame_queue.get()  # Discard oldest frame if queue is full
-        
+            frame_queue.get()
         frame_queue.put(request.data)
         return "OK", 200
     except Exception as e:
@@ -375,7 +571,6 @@ def generate_frames():
             yield (b'--frame\r\n'
                    b'Content-Type: image/jpeg\r\n\r\n' + current_frame + b'\r\n')
         else:
-            # Send blank frame if no data available
             yield (b'--frame\r\n'
                    b'Content-Type: image/jpeg\r\n\r\n' + b'\xff\xd8\xff\xe0\x00\x10JFIF\x00' + b'\r\n')
             time.sleep(0.01)
@@ -400,17 +595,17 @@ def face_status():
     else:
         return Response(b'\x00', mimetype='application/octet-stream')
 
+@app.route('/movement')
+def get_movement():
+    with movement_lock:
+        current_state = movement_state
+    return Response(current_state, mimetype='text/plain')
+
 if __name__ == '__main__':
-    # Start processing thread
     threading.Thread(target=process_frames, daemon=True).start()
-    
-    # Enable OpenCV optimizations
     cv2.setUseOptimized(True)
     cv2.ocl.setUseOpenCL(True)
-    
-    # Configure production server
     from waitress import serve
     serve(app, host="0.0.0.0", port=5999)
-
 
 
