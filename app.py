@@ -659,30 +659,30 @@ def smooth_movement(current_pos):
     return (smoothed_x, smoothed_size)
 
 def determine_movement(face_data, frame_size):
-    """Calculate movement direction based on face position and size"""
+    """More sensitive version of movement detection"""
     x, y, w, h = face_data
     frame_w, frame_h = frame_size
     
-    # Normalized face center (-0.5 to 0.5)
-    rel_x = ((x + w/2) / frame_w) - 0.5  
-    rel_size = w * h / (frame_w * frame_h) * 10  # Scaled size
+    # Calculate normalized position and size with higher sensitivity
+    rel_x = ((x + w/2) / frame_w - 0.5) * 1.5  # Amplify position changes
+    rel_size = (w * h) / (frame_w * frame_h) * 15  # More sensitive size scaling
     
-    # Apply smoothing
+    # Apply lighter smoothing for quicker response
     smoothed_x, smoothed_size = smooth_movement((rel_x, rel_size))
     
-    # Check movement thresholds
-    if smoothed_size > FORWARD_THRESHOLD:
+    # More sensitive thresholds
+    if smoothed_size > 1.15:  # 15% size increase (was 25%)
         return "forward"
-    elif smoothed_size < BACKWARD_THRESHOLD:
+    elif smoothed_size < 0.85:  # 15% size decrease (was 20%)
         return "backward"
-    elif smoothed_x < LEFT_THRESHOLD:
-        return "left"
-    elif smoothed_x > RIGHT_THRESHOLD:
+    elif smoothed_x < -0.15:  # 15% left threshold (was 20%)
+        return "left" 
+    elif smoothed_x > 0.15:   # 15% right threshold (was 20%)
         return "right"
-    elif abs(smoothed_x) < CENTER_ZONE:
+    elif abs(smoothed_x) < 0.1:  # Smaller center zone (10% vs 15%)
         return "stop"
     else:
-        return "stop"
+        return "moving"  # Intermediate state for smoother transitions
 
 def process_frames():
     global processed_frame, movement_state
