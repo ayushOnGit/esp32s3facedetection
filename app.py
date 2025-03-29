@@ -807,7 +807,7 @@ app = Flask(__name__)
 
 # Load Haar cascades
 face_cascade = cv2.CascadeClassifier('haarcascade/haarcascade_frontalface_default.xml')
-animal_cascade = cv2.CascadeClassifier('haarcascade/haarcascade_frontalcatface.xml')
+animal_cascade = cv2.CascadeClassifier('haarcascade/haarcascade_dogface.xml')  # Updated dog cascade
 
 # Configuration
 FRAME_QUEUE_SIZE = 5
@@ -845,15 +845,15 @@ def determine_movement(face_data, frame_size):
     rel_size = (w * h) / (frame_w * frame_h) * 15
     smoothed_x, smoothed_size = smooth_movement((rel_x, rel_size))
     
-    if smoothed_size > 1.15:
+    if smoothed_size > FORWARD_THRESHOLD:
         return "forward"
-    elif smoothed_size < 0.85:
+    elif smoothed_size < BACKWARD_THRESHOLD:
         return "backward"
-    elif smoothed_x < -0.15:
+    elif smoothed_x < LEFT_THRESHOLD:
         return "left" 
-    elif smoothed_x > 0.15:
+    elif smoothed_x > RIGHT_THRESHOLD:
         return "right"
-    elif abs(smoothed_x) < 0.1:
+    elif abs(smoothed_x) < CENTER_ZONE:
         return "stop"
     else:
         return "moving"
@@ -869,8 +869,12 @@ def process_frames():
             
             # Human face detection
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            gray = cv2.equalizeHist(gray)  # Added contrast enhancement
             faces = face_cascade.detectMultiScale(
-                gray, scaleFactor=1.1, minNeighbors=5, minSize=(50, 50))
+                gray, 
+                scaleFactor=1.1, 
+                minNeighbors=5, 
+                minSize=(50, 50))
             
             if len(faces) > 0:
                 main_face = max(faces, key=lambda f: f[2]*f[3])
@@ -883,11 +887,20 @@ def process_frames():
                 with movement_lock:
                     movement_state = "no_face"
             
-            # Animal face detection
+            # Dog face detection with optimized parameters
+            animal_gray = cv2.equalizeHist(gray)  # Additional preprocessing
             animal_faces = animal_cascade.detectMultiScale(
-                gray, scaleFactor=1.05, minNeighbors=6, minSize=(80, 80))
+                animal_gray,
+                scaleFactor=1.15,        # More aggressive scaling
+                minNeighbors=4,         # Reduced neighbor requirements
+                minSize=(60, 60),       # Smaller minimum size
+                flags=cv2.CASCADE_SCALE_IMAGE
+            )
+            
             for (x, y, w, h) in animal_faces:
                 cv2.rectangle(frame, (x, y), (x+w, y+h), (255, 0, 0), 2)
+                cv2.putText(frame, 'Dog', (x, y-10), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255,0,0), 2)
 
             _, buffer = cv2.imencode('.jpg', frame, [
                 cv2.IMWRITE_JPEG_QUALITY, 80,
@@ -922,17 +935,18 @@ def upload_frame():
 
 @app.route('/detect_animal', methods=['POST'])
 def detect_animal():
-    """Animal face detection endpoint"""
+    """Dog face detection endpoint"""
     try:
         frame_data = request.data
         frame = cv2.imdecode(np.frombuffer(frame_data, np.uint8), cv2.IMREAD_COLOR)
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        gray = cv2.equalizeHist(gray)  # Added preprocessing
         
         animal_faces = animal_cascade.detectMultiScale(
             gray,
-            scaleFactor=1.05,
-            minNeighbors=6,
-            minSize=(80, 80),
+            scaleFactor=1.15,
+            minNeighbors=4,
+            minSize=(60, 60),
             flags=cv2.CASCADE_SCALE_IMAGE
         )
         
@@ -940,6 +954,7 @@ def detect_animal():
             x, y, w, h = max(animal_faces, key=lambda f: f[2]*f[3])
             return jsonify({
                 "animal_detected": True,
+                "species": "dog",
                 "position": {
                     "x": int(x),
                     "y": int(y),
@@ -972,7 +987,7 @@ def video_feed():
 
 @app.route('/')
 def index():
-    return "Face Tracking Server"
+    return "Dog Face Tracking Server"
 
 if __name__ == '__main__':
     processor = threading.Thread(target=process_frames, daemon=True)
