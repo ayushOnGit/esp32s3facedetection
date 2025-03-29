@@ -609,7 +609,194 @@
 #     serve(app, host="0.0.0.0", port=5999)
 
 
-from flask import Flask, Response, request
+# from flask import Flask, Response, request
+# import cv2
+# import numpy as np
+# import threading
+# import time
+# from queue import Queue
+
+# app = Flask(__name__)
+# face_cascade = cv2.CascadeClassifier('haarcascade/haarcascade_frontalface_default.xml')
+
+# # Configuration
+# FRAME_QUEUE_SIZE = 5
+# PROCESSING_INTERVAL = 0.05  # 50ms between processing frames
+# MOVEMENT_SMOOTHING = 0.3    # Lower = more smoothing
+
+# # Movement thresholds (tune these as needed)
+# LEFT_THRESHOLD = -0.2       # Face center < -20% of frame width
+# RIGHT_THRESHOLD = 0.2       # Face center > 20% of frame width 
+# FORWARD_THRESHOLD = 1.25    # 25% size increase
+# BACKWARD_THRESHOLD = 0.8    # 20% size decrease
+# CENTER_ZONE = 0.15          # 15% center area
+
+# # Shared resources
+# frame_queue = Queue(maxsize=FRAME_QUEUE_SIZE)
+# processed_frame = None
+# frame_lock = threading.Lock()
+
+# # Movement tracking
+# movement_state = "stop"
+# face_history = []  # Stores last 3 face positions for smoothing
+# movement_lock = threading.Lock()
+
+# def smooth_movement(current_pos):
+#     """Apply exponential smoothing to movement detection"""
+#     global face_history
+    
+#     if len(face_history) == 0:
+#         face_history = [current_pos] * 3
+#         return current_pos
+    
+#     # Simple moving average
+#     face_history.pop(0)
+#     face_history.append(current_pos)
+    
+#     smoothed_x = sum(pos[0] for pos in face_history) / 3
+#     smoothed_size = sum(pos[1] for pos in face_history) / 3
+    
+#     return (smoothed_x, smoothed_size)
+
+# def determine_movement(face_data, frame_size):
+#     """More sensitive version of movement detection"""
+#     x, y, w, h = face_data
+#     frame_w, frame_h = frame_size
+    
+#     # Calculate normalized position and size with higher sensitivity
+#     rel_x = ((x + w/2) / frame_w - 0.5) * 1.5  # Amplify position changes
+#     rel_size = (w * h) / (frame_w * frame_h) * 15  # More sensitive size scaling
+    
+#     # Apply lighter smoothing for quicker response
+#     smoothed_x, smoothed_size = smooth_movement((rel_x, rel_size))
+    
+#     # More sensitive thresholds
+#     if smoothed_size > 1.15:  # 15% size increase (was 25%)
+#         return "forward"
+#     elif smoothed_size < 0.85:  # 15% size decrease (was 20%)
+#         return "backward"
+#     elif smoothed_x < -0.15:  # 15% left threshold (was 20%)
+#         return "left" 
+#     elif smoothed_x > 0.15:   # 15% right threshold (was 20%)
+#         return "right"
+#     elif abs(smoothed_x) < 0.1:  # Smaller center zone (10% vs 15%)
+#         return "stop"
+#     else:
+#         return "moving"  # Intermediate state for smoother transitions
+
+# def process_frames():
+#     global processed_frame, movement_state
+    
+#     while True:
+#         start_time = time.time()
+        
+#         if not frame_queue.empty():
+#             # Get and decode frame
+#             frame_data = frame_queue.get()
+#             frame = cv2.imdecode(np.frombuffer(frame_data, np.uint8), cv2.IMREAD_COLOR)
+#             frame_size = (frame.shape[1], frame.shape[0])
+            
+#             # Detect faces
+#             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+#             faces = face_cascade.detectMultiScale(
+#                 gray,
+#                 scaleFactor=1.1,
+#                 minNeighbors=5,
+#                 minSize=(50, 50),
+#                 flags=cv2.CASCADE_SCALE_IMAGE
+#             )
+            
+#             if len(faces) > 0:
+#                 # Track largest face
+#                 main_face = max(faces, key=lambda f: f[2]*f[3])
+#                 x, y, w, h = main_face
+                
+#                 # Draw bounding box
+#                 cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 255, 0), 2)
+                
+#                 # Update movement state
+#                 new_state = determine_movement(main_face, frame_size)
+#                 with movement_lock:
+#                     movement_state = new_state
+#             else:
+#                 with movement_lock:
+#                     movement_state = "no_face"
+            
+#             # Encode processed frame
+#             _, buffer = cv2.imencode('.jpg', frame, [
+#                 cv2.IMWRITE_JPEG_QUALITY, 80,
+#                 cv2.IMWRITE_JPEG_OPTIMIZE, 1
+#             ])
+            
+#             with frame_lock:
+#                 processed_frame = buffer.tobytes()
+        
+#         # Maintain consistent processing rate
+#         elapsed = time.time() - start_time
+#         if elapsed < PROCESSING_INTERVAL:
+#             time.sleep(PROCESSING_INTERVAL - elapsed)
+
+# @app.route('/movement')
+# def movement_endpoint():
+#     """Endpoint that returns current movement state"""
+#     with movement_lock:
+#         return Response(
+#             movement_state,
+#             mimetype='text/plain',
+#             headers={'Cache-Control': 'no-cache'}
+#         )
+
+# @app.route('/upload', methods=['POST'])
+# def upload_frame():
+#     """Endpoint for receiving video frames"""
+#     try:
+#         if not frame_queue.full():
+#             frame_queue.put(request.data)
+#         return "OK", 200
+#     except Exception as e:
+#         print(f"Upload error: {e}")
+#         return "Error", 500
+
+# def generate_feed():
+#     """Generator for streaming processed frames"""
+#     while True:
+#         with frame_lock:
+#             frame = processed_frame
+        
+#         if frame:
+#             yield (b'--frame\r\n'
+#                    b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
+#         else:
+#             time.sleep(0.1)
+
+# @app.route('/video_feed')
+# def video_feed():
+#     """Endpoint for streaming processed video"""
+#     return Response(
+#         generate_feed(),
+#         mimetype='multipart/x-mixed-replace; boundary=frame'
+#     )
+
+# if __name__ == '__main__':
+#     # Start processing thread
+#     processor = threading.Thread(target=process_frames, daemon=True)
+#     processor.start()
+    
+#     # Configure and run server
+#     cv2.setUseOptimized(True)
+#     cv2.ocl.setUseOpenCL(True)
+    
+#     from waitress import serve
+#     serve(
+#         app,
+#         host="0.0.0.0",
+#         port=5999,
+#         threads=4,
+#         channel_timeout=60
+#     )
+
+
+from flask import Flask, Response, request, jsonify
 import cv2
 import numpy as np
 import threading
@@ -617,104 +804,78 @@ import time
 from queue import Queue
 
 app = Flask(__name__)
+
+# Load Haar cascades
 face_cascade = cv2.CascadeClassifier('haarcascade/haarcascade_frontalface_default.xml')
+animal_cascade = cv2.CascadeClassifier('haarcascade/haarcascade_frontalcatface.xml')
 
 # Configuration
 FRAME_QUEUE_SIZE = 5
-PROCESSING_INTERVAL = 0.05  # 50ms between processing frames
-MOVEMENT_SMOOTHING = 0.3    # Lower = more smoothing
-
-# Movement thresholds (tune these as needed)
-LEFT_THRESHOLD = -0.2       # Face center < -20% of frame width
-RIGHT_THRESHOLD = 0.2       # Face center > 20% of frame width 
-FORWARD_THRESHOLD = 1.25    # 25% size increase
-BACKWARD_THRESHOLD = 0.8    # 20% size decrease
-CENTER_ZONE = 0.15          # 15% center area
+PROCESSING_INTERVAL = 0.05
+MOVEMENT_SMOOTHING = 0.3
+LEFT_THRESHOLD = -0.2
+RIGHT_THRESHOLD = 0.2
+FORWARD_THRESHOLD = 1.25
+BACKWARD_THRESHOLD = 0.8
+CENTER_ZONE = 0.15
 
 # Shared resources
 frame_queue = Queue(maxsize=FRAME_QUEUE_SIZE)
 processed_frame = None
 frame_lock = threading.Lock()
-
-# Movement tracking
 movement_state = "stop"
-face_history = []  # Stores last 3 face positions for smoothing
+face_history = []
 movement_lock = threading.Lock()
 
 def smooth_movement(current_pos):
-    """Apply exponential smoothing to movement detection"""
     global face_history
-    
     if len(face_history) == 0:
         face_history = [current_pos] * 3
         return current_pos
-    
-    # Simple moving average
     face_history.pop(0)
     face_history.append(current_pos)
-    
     smoothed_x = sum(pos[0] for pos in face_history) / 3
     smoothed_size = sum(pos[1] for pos in face_history) / 3
-    
     return (smoothed_x, smoothed_size)
 
 def determine_movement(face_data, frame_size):
-    """More sensitive version of movement detection"""
     x, y, w, h = face_data
     frame_w, frame_h = frame_size
-    
-    # Calculate normalized position and size with higher sensitivity
-    rel_x = ((x + w/2) / frame_w - 0.5) * 1.5  # Amplify position changes
-    rel_size = (w * h) / (frame_w * frame_h) * 15  # More sensitive size scaling
-    
-    # Apply lighter smoothing for quicker response
+    rel_x = ((x + w/2) / frame_w - 0.5) * 1.5
+    rel_size = (w * h) / (frame_w * frame_h) * 15
     smoothed_x, smoothed_size = smooth_movement((rel_x, rel_size))
     
-    # More sensitive thresholds
-    if smoothed_size > 1.15:  # 15% size increase (was 25%)
+    if smoothed_size > 1.15:
         return "forward"
-    elif smoothed_size < 0.85:  # 15% size decrease (was 20%)
+    elif smoothed_size < 0.85:
         return "backward"
-    elif smoothed_x < -0.15:  # 15% left threshold (was 20%)
+    elif smoothed_x < -0.15:
         return "left" 
-    elif smoothed_x > 0.15:   # 15% right threshold (was 20%)
+    elif smoothed_x > 0.15:
         return "right"
-    elif abs(smoothed_x) < 0.1:  # Smaller center zone (10% vs 15%)
+    elif abs(smoothed_x) < 0.1:
         return "stop"
     else:
-        return "moving"  # Intermediate state for smoother transitions
+        return "moving"
 
 def process_frames():
     global processed_frame, movement_state
-    
     while True:
         start_time = time.time()
-        
         if not frame_queue.empty():
-            # Get and decode frame
             frame_data = frame_queue.get()
             frame = cv2.imdecode(np.frombuffer(frame_data, np.uint8), cv2.IMREAD_COLOR)
             frame_size = (frame.shape[1], frame.shape[0])
             
-            # Detect faces
+            # Human face detection
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             faces = face_cascade.detectMultiScale(
-                gray,
-                scaleFactor=1.1,
-                minNeighbors=5,
-                minSize=(50, 50),
-                flags=cv2.CASCADE_SCALE_IMAGE
-            )
+                gray, scaleFactor=1.1, minNeighbors=5, minSize=(50, 50))
             
             if len(faces) > 0:
-                # Track largest face
                 main_face = max(faces, key=lambda f: f[2]*f[3])
                 x, y, w, h = main_face
-                
-                # Draw bounding box
                 cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 255, 0), 2)
-                
-                # Update movement state
                 new_state = determine_movement(main_face, frame_size)
                 with movement_lock:
                     movement_state = new_state
@@ -722,7 +883,12 @@ def process_frames():
                 with movement_lock:
                     movement_state = "no_face"
             
-            # Encode processed frame
+            # Animal face detection
+            animal_faces = animal_cascade.detectMultiScale(
+                gray, scaleFactor=1.05, minNeighbors=6, minSize=(80, 80))
+            for (x, y, w, h) in animal_faces:
+                cv2.rectangle(frame, (x, y), (x+w, y+h), (255, 0, 0), 2)
+
             _, buffer = cv2.imencode('.jpg', frame, [
                 cv2.IMWRITE_JPEG_QUALITY, 80,
                 cv2.IMWRITE_JPEG_OPTIMIZE, 1
@@ -731,14 +897,12 @@ def process_frames():
             with frame_lock:
                 processed_frame = buffer.tobytes()
         
-        # Maintain consistent processing rate
         elapsed = time.time() - start_time
         if elapsed < PROCESSING_INTERVAL:
             time.sleep(PROCESSING_INTERVAL - elapsed)
 
 @app.route('/movement')
 def movement_endpoint():
-    """Endpoint that returns current movement state"""
     with movement_lock:
         return Response(
             movement_state,
@@ -748,7 +912,6 @@ def movement_endpoint():
 
 @app.route('/upload', methods=['POST'])
 def upload_frame():
-    """Endpoint for receiving video frames"""
     try:
         if not frame_queue.full():
             frame_queue.put(request.data)
@@ -757,12 +920,43 @@ def upload_frame():
         print(f"Upload error: {e}")
         return "Error", 500
 
+@app.route('/detect_animal', methods=['POST'])
+def detect_animal():
+    """Animal face detection endpoint"""
+    try:
+        frame_data = request.data
+        frame = cv2.imdecode(np.frombuffer(frame_data, np.uint8), cv2.IMREAD_COLOR)
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        
+        animal_faces = animal_cascade.detectMultiScale(
+            gray,
+            scaleFactor=1.05,
+            minNeighbors=6,
+            minSize=(80, 80),
+            flags=cv2.CASCADE_SCALE_IMAGE
+        )
+        
+        if len(animal_faces) > 0:
+            x, y, w, h = max(animal_faces, key=lambda f: f[2]*f[3])
+            return jsonify({
+                "animal_detected": True,
+                "position": {
+                    "x": int(x),
+                    "y": int(y),
+                    "width": int(w),
+                    "height": int(h)
+                }
+            })
+        return jsonify({"animal_detected": False})
+    
+    except Exception as e:
+        print(f"Animal detection error: {e}")
+        return jsonify({"error": str(e)}), 500
+
 def generate_feed():
-    """Generator for streaming processed frames"""
     while True:
         with frame_lock:
             frame = processed_frame
-        
         if frame:
             yield (b'--frame\r\n'
                    b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
@@ -771,18 +965,19 @@ def generate_feed():
 
 @app.route('/video_feed')
 def video_feed():
-    """Endpoint for streaming processed video"""
     return Response(
         generate_feed(),
         mimetype='multipart/x-mixed-replace; boundary=frame'
     )
 
+@app.route('/')
+def index():
+    return "Face Tracking Server"
+
 if __name__ == '__main__':
-    # Start processing thread
     processor = threading.Thread(target=process_frames, daemon=True)
     processor.start()
     
-    # Configure and run server
     cv2.setUseOptimized(True)
     cv2.ocl.setUseOpenCL(True)
     
