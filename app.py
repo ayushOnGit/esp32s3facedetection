@@ -807,7 +807,7 @@ app = Flask(__name__)
 
 # Load Haar cascades
 face_cascade = cv2.CascadeClassifier('haarcascade/haarcascade_frontalface_default.xml')
-animal_cascade = cv2.CascadeClassifier('haarcascade/haarcascade_dogface.xml')  # Updated dog cascade
+animal_cascade = cv2.CascadeClassifier('haarcascade/haarcascade_dogface.xml')
 
 # Configuration
 FRAME_QUEUE_SIZE = 5
@@ -818,6 +818,9 @@ RIGHT_THRESHOLD = 0.2
 FORWARD_THRESHOLD = 1.25
 BACKWARD_THRESHOLD = 0.8
 CENTER_ZONE = 0.15
+ANIMAL_MIN_NEIGHBORS = 6
+ANIMAL_SCALE_FACTOR = 1.1
+NMS_OVERLAP_THRESH = 0.3
 
 # Shared resources
 frame_queue = Queue(maxsize=FRAME_QUEUE_SIZE)
@@ -826,6 +829,40 @@ frame_lock = threading.Lock()
 movement_state = "stop"
 face_history = []
 movement_lock = threading.Lock()
+
+def non_max_suppression(boxes, overlap_thresh):
+    """Perform non-maximum suppression on detected boxes."""
+    if len(boxes) == 0:
+        return []
+    
+    boxes = np.array(boxes).astype("float")
+    pick = []
+    
+    x1 = boxes[:,0]
+    y1 = boxes[:,1]
+    x2 = x1 + boxes[:,2]
+    y2 = y1 + boxes[:,3]
+    
+    area = boxes[:,2] * boxes[:,3]
+    idxs = np.argsort(area)[::-1]
+    
+    while len(idxs) > 0:
+        last = len(idxs) - 1
+        i = idxs[last]
+        pick.append(i)
+        
+        xx1 = np.maximum(x1[i], x1[idxs[:last]])
+        yy1 = np.maximum(y1[i], y1[idxs[:last]])
+        xx2 = np.minimum(x2[i], x2[idxs[:last]])
+        yy2 = np.minimum(y2[i], y2[idxs[:last]])
+        
+        w = np.maximum(0, xx2 - xx1)
+        h = np.maximum(0, yy2 - yy1)
+        overlap = (w * h) / area[idxs[:last]]
+        
+        idxs = np.delete(idxs, np.concatenate(([last], np.where(overlap > overlap_thresh)[0])))
+    
+    return boxes[pick].astype("int")
 
 def smooth_movement(current_pos):
     global face_history
@@ -869,7 +906,7 @@ def process_frames():
             
             # Human face detection
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            gray = cv2.equalizeHist(gray)  # Added contrast enhancement
+            gray = cv2.equalizeHist(gray)
             faces = face_cascade.detectMultiScale(
                 gray, 
                 scaleFactor=1.1, 
@@ -887,21 +924,24 @@ def process_frames():
                 with movement_lock:
                     movement_state = "no_face"
             
-            # Dog face detection with optimized parameters
-            animal_gray = cv2.equalizeHist(gray)  # Additional preprocessing
+            # Animal detection with optimized parameters
             animal_faces = animal_cascade.detectMultiScale(
-                animal_gray,
-                scaleFactor=1.15,        # More aggressive scaling
-                minNeighbors=4,         # Reduced neighbor requirements
-                minSize=(60, 60),       # Smaller minimum size
+                gray,
+                scaleFactor=ANIMAL_SCALE_FACTOR,
+                minNeighbors=ANIMAL_MIN_NEIGHBORS,
+                minSize=(60, 60),
                 flags=cv2.CASCADE_SCALE_IMAGE
             )
+            
+            # Apply non-maximum suppression
+            animal_faces = non_max_suppression(animal_faces, NMS_OVERLAP_THRESH)
             
             for (x, y, w, h) in animal_faces:
                 cv2.rectangle(frame, (x, y), (x+w, y+h), (255, 0, 0), 2)
                 cv2.putText(frame, 'Dog', (x, y-10), 
                            cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255,0,0), 2)
 
+            # Optimized JPEG encoding
             _, buffer = cv2.imencode('.jpg', frame, [
                 cv2.IMWRITE_JPEG_QUALITY, 80,
                 cv2.IMWRITE_JPEG_OPTIMIZE, 1
@@ -935,20 +975,21 @@ def upload_frame():
 
 @app.route('/detect_animal', methods=['POST'])
 def detect_animal():
-    """Dog face detection endpoint"""
     try:
         frame_data = request.data
         frame = cv2.imdecode(np.frombuffer(frame_data, np.uint8), cv2.IMREAD_COLOR)
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        gray = cv2.equalizeHist(gray)  # Added preprocessing
+        gray = cv2.equalizeHist(gray)
         
         animal_faces = animal_cascade.detectMultiScale(
             gray,
-            scaleFactor=1.15,
-            minNeighbors=4,
+            scaleFactor=ANIMAL_SCALE_FACTOR,
+            minNeighbors=ANIMAL_MIN_NEIGHBORS,
             minSize=(60, 60),
             flags=cv2.CASCADE_SCALE_IMAGE
         )
+        
+        animal_faces = non_max_suppression(animal_faces, NMS_OVERLAP_THRESH)
         
         if len(animal_faces) > 0:
             x, y, w, h = max(animal_faces, key=lambda f: f[2]*f[3])
@@ -987,12 +1028,13 @@ def video_feed():
 
 @app.route('/')
 def index():
-    return "Dog Face Tracking Server"
+    return "Dual Detection Server (Human & Dog)"
 
 if __name__ == '__main__':
     processor = threading.Thread(target=process_frames, daemon=True)
     processor.start()
     
+    # Enable OpenCV optimizations
     cv2.setUseOptimized(True)
     cv2.ocl.setUseOpenCL(True)
     
@@ -1004,6 +1046,5 @@ if __name__ == '__main__':
         threads=4,
         channel_timeout=60
     )
-
 
 
