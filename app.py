@@ -622,31 +622,29 @@ import time
 from queue import Queue
 
 app = Flask(__name__)
-# Original face cascade for human faces
-face_cascade = cv2.CascadeClassifier('haarcascade/haarcascade_frontalface_default.xml')
-# New cascade for dog face detection
-animal_cascade = cv2.CascadeClassifier('haarcascade/haarcascade_dogface.xml')
 
-# Shared resources for face detection (human)
+# Load the face and dog face cascade classifiers
+face_cascade = cv2.CascadeClassifier('haarcascade/haarcascade_frontalface_default.xml')
+dog_cascade = cv2.CascadeClassifier('haarcascade/haarcascade_dogface.xml')
+
+# Shared resources with thread safety
 frame_queue = Queue(maxsize=5)
 processed_frame = None
 last_processed_time = None
 current_face_status = False
 lock = threading.Lock()
 
-# Shared resources for animal (dog) detection
+# Shared resources for animal detection with thread safety
 animal_frame_queue = Queue(maxsize=5)
-processed_animal_frame = None
-last_animal_processed_time = None
-current_animal_status = False
+animal_processed_frame = None
 animal_lock = threading.Lock()
 
-# Movement detection variables for face tracking
+# Movement detection variables
 movement_state = "stop"
 previous_face_data = None  # (center_x, center_y, width, height)
 movement_lock = threading.Lock()
 FRAME_CENTER_THRESHOLD = 0.2  # 20% of frame width considered center
-SIZE_CHANGE_THRESHOLD = 0.15   # 15% size change for forward/backward
+SIZE_CHANGE_THRESHOLD = 0.15  # 15% size change for forward/backward
 POSITION_CHANGE_THRESHOLD = 0.1  # 10% position change for left/right
 
 def calculate_movement(current_data, frame_width, frame_height):
@@ -666,7 +664,7 @@ def calculate_movement(current_data, frame_width, frame_height):
     position_change = abs(dx) / frame_width
     size_change = abs(dw) / prev_w
     
-    # Determine movement direction
+    # Determine movement
     if position_change > POSITION_CHANGE_THRESHOLD:
         return "left" if dx < 0 else "right"
     elif size_change > SIZE_CHANGE_THRESHOLD:
@@ -685,18 +683,18 @@ def process_frames():
         if not frame_queue.empty():
             start_time = time.time()
             
-            # Get frame data from the face queue
+            # Get frame data from queue
             frame_data = frame_queue.get()
             
             # Decode and process frame
             frame = cv2.imdecode(np.frombuffer(frame_data, np.uint8), cv2.IMREAD_COLOR)
             frame_height, frame_width = frame.shape[:2]
             
-            # Optimized processing: resize frame for faster face detection
+            # Optimized processing pipeline
             small_frame = cv2.resize(frame, (0, 0), fx=0.5, fy=0.5)
             gray = cv2.cvtColor(small_frame, cv2.COLOR_BGR2GRAY)
             
-            # Face detection using optimized parameters
+            # Face detection with optimized parameters
             faces = face_cascade.detectMultiScale(
                 gray,
                 scaleFactor=1.2,
@@ -705,19 +703,19 @@ def process_frames():
                 flags=cv2.CASCADE_SCALE_IMAGE
             )
             
-            # Scale coordinates back to original frame size
+            # Scale coordinates back to original size
             faces = [(x * 2, y * 2, w * 2, h * 2) for (x, y, w, h) in faces]
             
             current_face = None
             if len(faces) > 0:
-                # Select the largest face detected
+                # Track largest face
                 current_face = max(faces, key=lambda f: f[2] * f[3])
                 x, y, w, h = current_face
                 center_x = x + w / 2
                 center_y = y + h / 2
                 current_data = (center_x, center_y, w, h)
                 
-                # Calculate movement relative to previous frame
+                # Calculate movement
                 if previous_face_data is not None:
                     new_state = calculate_movement(current_data, frame_width, frame_height)
                     with movement_lock:
@@ -729,12 +727,12 @@ def process_frames():
                     movement_state = "no_face"
                 previous_face_data = None
             
-            # Draw bounding box for the detected face
+            # Draw bounding boxes
             if current_face is not None:
                 x, y, w, h = current_face
                 cv2.rectangle(frame, (x, y), (x + w, y + h), (255, 0, 0), 2)
             
-            # Encode frame for streaming
+            # Encode and update frame
             _, buffer = cv2.imencode('.jpg', frame, [
                 cv2.IMWRITE_JPEG_QUALITY, 60,
                 cv2.IMWRITE_JPEG_OPTIMIZE, 1
@@ -745,86 +743,71 @@ def process_frames():
                 last_processed_time = time.time()
                 current_face_status = len(faces) > 0
             
-            print(f"Processed face frame in {(time.time() - start_time) * 1000:.1f}ms")
+            print(f"Processed frame in {(time.time() - start_time) * 1000:.1f}ms")
 
 def process_animal_frames():
-    global processed_animal_frame, last_animal_processed_time, current_animal_status
+    global animal_processed_frame
     while True:
         if not animal_frame_queue.empty():
-            start_time = time.time()
-            
-            # Get frame data from the animal queue
             frame_data = animal_frame_queue.get()
-            
-            # Decode and process frame
             frame = cv2.imdecode(np.frombuffer(frame_data, np.uint8), cv2.IMREAD_COLOR)
-            frame_height, frame_width = frame.shape[:2]
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             
-            # Resize and convert to grayscale for dog detection
-            small_frame = cv2.resize(frame, (0, 0), fx=0.5, fy=0.5)
-            gray = cv2.cvtColor(small_frame, cv2.COLOR_BGR2GRAY)
-            
-            # Dog face detection using the dog cascade
-            dogs = animal_cascade.detectMultiScale(
+            # Dog face detection
+            dogs = dog_cascade.detectMultiScale(
                 gray,
                 scaleFactor=1.2,
-                minNeighbors=3,
-                minSize=(30, 30),
+                minNeighbors=5,
+                minSize=(50, 50),
                 flags=cv2.CASCADE_SCALE_IMAGE
             )
             
-            # Scale coordinates back to original size
-            dogs = [(x * 2, y * 2, w * 2, h * 2) for (x, y, w, h) in dogs]
-            
-            # Draw bounding box around the largest detected dog face (if any)
-            if len(dogs) > 0:
-                current_dog = max(dogs, key=lambda d: d[2] * d[3])
-                x, y, w, h = current_dog
+            for (x, y, w, h) in dogs:
                 cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
             
-            # Encode frame for streaming
             _, buffer = cv2.imencode('.jpg', frame, [
                 cv2.IMWRITE_JPEG_QUALITY, 60,
                 cv2.IMWRITE_JPEG_OPTIMIZE, 1
             ])
             
             with animal_lock:
-                processed_animal_frame = buffer.tobytes()
-                last_animal_processed_time = time.time()
-                current_animal_status = len(dogs) > 0
-            
-            print(f"Processed animal frame in {(time.time() - start_time) * 1000:.1f}ms")
+                animal_processed_frame = buffer.tobytes()
 
 @app.route('/')
 def index():
     return """
-    <h1>Face Tracking Server</h1>
+    <h1>Face and Animal Tracking Server</h1>
     <p>Endpoints:</p>
     <ul>
-        <li>POST /upload - Stream video frames</li>
-        <li>GET /video_feed - Get processed video stream for human faces</li>
-        <li>GET /face_status - Check face detection status</li>
+        <li>POST /upload - Stream video frames for human face detection</li>
+        <li>GET /video_feed - Get processed video stream with human face detection</li>
+        <li>GET /face_status - Check human face detection status</li>
         <li>GET /movement - Get current movement state</li>
-        <li>GET /animal_video_feed - Get processed video stream for dog faces</li>
+        <li>POST /animal_upload - Stream video frames for animal face detection</li>
+        <li>GET /animal_video_feed - Get processed video stream with animal face detection</li>
     </ul>
     """
 
 @app.route('/upload', methods=['POST'])
 def handle_upload():
     try:
-        # For human face detection
         if frame_queue.full():
             frame_queue.get()
         frame_queue.put(request.data)
-        
-        # Duplicate the frame for animal (dog) detection
-        if animal_frame_queue.full():
-            animal_frame_queue.get()
-        animal_frame_queue.put(request.data)
-        
         return "OK", 200
     except Exception as e:
         print(f"Upload error: {str(e)}")
+        return "Error", 500
+
+@app.route('/animal_upload', methods=['POST'])
+def handle_animal_upload():
+    try:
+        if animal_frame_queue.full():
+            animal_frame_queue.get()
+        animal_frame_queue.put(request.data)
+        return "OK", 200
+    except Exception as e:
+        print(f"Animal upload error: {str(e)}")
         return "Error", 500
 
 def generate_frames():
@@ -836,29 +819,25 @@ def generate_frames():
             yield (b'--frame\r\n'
                    b'Content-Type: image/jpeg\r\n\r\n' + current_frame + b'\r\n')
         else:
-            # Provide a minimal JPEG header as a placeholder
             yield (b'--frame\r\n'
                    b'Content-Type: image/jpeg\r\n\r\n' + b'\xff\xd8\xff\xe0\x00\x10JFIF\x00' + b'\r\n')
-        time.sleep(0.01)
-
-def generate_animal_frames():
-    while True:
-        with animal_lock:
-            current_frame = processed_animal_frame
-        
-        if current_frame is not None:
-            yield (b'--frame\r\n'
-                   b'Content-Type: image/jpeg\r\n\r\n' + current_frame + b'\r\n')
-        else:
-            # Placeholder image when no frame is available
-            yield (b'--frame\r\n'
-                   b'Content-Type: image/jpeg\r\n\r\n' + b'\xff\xd8\xff\xe0\x00\x10JFIF\x00' + b'\r\n')
-        time.sleep(0.01)
+            time.sleep(0.01)
 
 @app.route('/video_feed')
 def video_feed():
     return Response(generate_frames(),
                     mimetype='multipart/x-mixed-replace; boundary=frame')
+
+def generate_animal_frames():
+    while True:
+        with animal_lock:
+            current_frame = animal_processed_frame
+        
+        if current_frame is not None:
+            yield (b'--frame\r\n'
+                   b'Content-Type: image/jpeg\r\n\r\n' + current_frame + b'\r\n')
+        else:
+            time.sleep(0.01)
 
 @app.route('/animal_video_feed')
 def animal_video_feed():
@@ -887,10 +866,8 @@ def get_movement():
     return Response(current_state, mimetype='text/plain')
 
 if __name__ == '__main__':
-    # Start the human face detection thread
-    threading.Thread(target=process_frames, daemon=True).start()
-    # Start the dog face detection thread
     threading.Thread(target=process_animal_frames, daemon=True).start()
+    threading.Thread(target=process_frames, daemon=True).start()
     cv2.setUseOptimized(True)
     cv2.ocl.setUseOpenCL(True)
     from waitress import serve
